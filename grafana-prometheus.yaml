@@ -9,7 +9,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: prometheus-k8s
-  namespace: dev-prometheus
+  namespace: monitoring
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -35,13 +35,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: prometheus-k8s
-  namespace: dev-prometheus
+  namespace: monitoring
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-config
-  namespace: dev-prometheus
+  namespace: monitoring
 data:
   grafana.ini: |
     [smtp]
@@ -57,7 +57,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grafana-core
-  namespace: dev-prometheus
+  namespace: monitoring
   labels:
     app: grafana
     component: core
@@ -82,8 +82,8 @@ spec:
         resources:
           # keep request = limit to keep this container in guaranteed class
           limits:
-            cpu: 100m
-            memory: 2000Mi
+            cpu: 2000m
+            memory: 4000Mi
           requests:
             cpu: 10m
             memory: 50Mi
@@ -112,8 +112,8 @@ spec:
           httpGet:
             path: /login
             port: 3000
-          # initialDelaySeconds: 30
-          # timeoutSeconds: 1
+          initialDelaySeconds: 30
+          timeoutSeconds: 1
         volumeMounts:
         - name: grafana-persistent-storage
           mountPath: /var/lib/grafana
@@ -125,11 +125,11 @@ spec:
         configMap:
           name: grafana-config
       - name: grafana-persistent-storage
-        # persistentVolumeClaim:
-        #   claimName: grafana-pvc
-        nfs:
-          server: 172.16.50.22 #replace by your nfs ip
-          path: /nfs
+        persistentVolumeClaim:
+          claimName: grafana-pvc
+        # nfs:
+        #   server: 10.2.4.6 #replace by your nfs ip
+        #   path: /nfs/dev
 
 ---
 apiVersion: v1
@@ -139,14 +139,14 @@ data:
   admin-username: YWRtaW4=
 metadata:
   name: grafana
-  namespace: dev-prometheus
+  namespace: monitoring
 type: Opaque
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: grafana
-  namespace: dev-prometheus
+  namespace: monitoring
   labels:
     app: grafana
     component: core
@@ -164,7 +164,7 @@ metadata:
   name: prometheus-core
   labels:
     name: prometheus-core
-  namespace: dev-prometheus
+  namespace: monitoring
 data:
   # prometheus.rules: |-
   #   groups:
@@ -181,7 +181,6 @@ data:
     global:
       scrape_interval: 30s
       evaluation_interval: 30s
-
     scrape_configs: 
       - job_name: kubernetes-nodes-cadvisor
         scrape_interval: 30s
@@ -223,31 +222,23 @@ data:
           action: keep
       
       - job_name: 'kubernetes-apiservers'
-
         kubernetes_sd_configs:
         - role: endpoints
         scheme: https
-
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
         bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-
         relabel_configs:
         - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
           action: keep
           regex: default;kubernetes;https
-
       - job_name: 'kubernetes-nodes'
-
         scheme: https
-
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
         bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-
         kubernetes_sd_configs:
         - role: node
-
         relabel_configs:
         - action: labelmap
           regex: __meta_kubernetes_node_label_(.+)
@@ -259,10 +250,8 @@ data:
           replacement: /api/v1/nodes/${1}/proxy/metrics     
       
       - job_name: 'kubernetes-pods'
-
         kubernetes_sd_configs:
         - role: pod
-
         relabel_configs:
         - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
           action: keep
@@ -288,18 +277,13 @@ data:
       - job_name: 'kube-state-metrics'
         static_configs:
           - targets: ['kube-state-metrics.kube-system.svc.cluster.local:8080']
-
       - job_name: 'kubernetes-cadvisor'
-
         scheme: https
-
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
         bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-
         kubernetes_sd_configs:
         - role: node
-
         relabel_configs:
         - action: labelmap
           regex: __meta_kubernetes_node_label_(.+)
@@ -311,10 +295,8 @@ data:
           replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
       
       - job_name: 'kubernetes-service-endpoints'
-
         kubernetes_sd_configs:
         - role: endpoints
-
         relabel_configs:
         - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
           action: keep
@@ -340,13 +322,12 @@ data:
         - source_labels: [__meta_kubernetes_service_name]
           action: replace
           target_label: kubernetes_name
-
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: prometheus-core
-  namespace: dev-prometheus
+  namespace: monitoring
   labels:
     app: prometheus
     component: core
@@ -371,7 +352,7 @@ spec:
           # - '-storage.local.memory-chunks=500000'
           # - '-config.file=/etc/prometheus/prometheus.yaml'
           # - '-alertmanager.url=http://alertmanager:9093/'
-          - "--storage.tsdb.retention.time=15d"
+          - "--storage.tsdb.retention.time=1d"
           - "--config.file=/etc/prometheus/prometheus.yml"
           - "--storage.tsdb.path=/prometheus/"
         ports:
@@ -382,8 +363,8 @@ spec:
             cpu: 50m
             memory: 70M
           limits:
-            cpu: 200m
-            memory: 1500M
+            cpu: 2000m
+            memory: 4000M
         volumeMounts:
         - name: config-volume
           mountPath: /etc/prometheus
@@ -391,6 +372,13 @@ spec:
           mountPath: /prometheus
         # - name: rules-volume
         #   mountPath: /etc/prometheus-rules
+      initContainers:
+      - name: prometheus-data-permission-fix
+        image: busybox
+        command: ["/bin/chmod","-R","777", "/prometheus"]
+        volumeMounts:
+        - name: prometheus-persistent-storage
+          mountPath: /prometheus
       volumes:
       - name: config-volume
         configMap:
@@ -399,15 +387,17 @@ spec:
       #   configMap:
       #     name: prometheus-rules
       - name: prometheus-persistent-storage
-        nfs:
-          server: 172.16.50.22 #replace by your nfs ip
-          path: /nfs
+        persistentVolumeClaim:
+          claimName: prometheus-pvc
+        # nfs:
+        #   server: 10.2.4.6 #replace by your nfs ip
+        #   path: /nfs/dev
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kube-state-metrics
-  namespace: dev-prometheus
+  namespace: monitoring
   labels: 
     app: kube-state-metrics
 spec:
@@ -446,7 +436,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: kube-state-metrics
-  namespace: dev-prometheus
+  namespace: monitoring
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -473,7 +463,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: kube-state-metrics
-  namespace: dev-prometheus
+  namespace: monitoring
 ---
 apiVersion: v1
 kind: Service
@@ -481,7 +471,7 @@ metadata:
   annotations:
     prometheus.io/scrape: 'true'
   name: kube-state-metrics
-  namespace: dev-prometheus
+  namespace: monitoring
   labels:
     app: kube-state-metrics
 spec:
@@ -497,7 +487,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: node-directory-size-metrics
-  namespace: dev-prometheus
+  namespace: monitoring
   labels:
     app: node-directory-size-metrics
   annotations:
@@ -536,8 +526,8 @@ spec:
             cpu: 10m
             memory: 10M
           limits:
-            cpu: 50m
-            memory: 100M
+            cpu: 2000m
+            memory: 4000M
         command:
         - fish
         - --command
@@ -565,8 +555,8 @@ spec:
             cpu: 10m
             memory: 10M
           limits:
-            cpu: 50m
-            memory: 50M
+            cpu: 2000m
+            memory: 4000M
         command:
         - "caddy"
         - "-port=9102"
@@ -588,7 +578,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: prometheus-node-exporter
-  namespace: dev-prometheus
+  namespace: monitoring
   labels:
     app: prometheus
     component: node-exporter
@@ -611,8 +601,8 @@ spec:
             cpu: 10m
             memory: 20M
           limits:
-            cpu: 100m
-            memory: 100M
+            cpu: 2000m
+            memory: 4000M
         ports:
         - name: prom-node-exp
           #^ must be an IANA_SVC_NAME (at most 15 characters, ..)
@@ -627,7 +617,7 @@ metadata:
   annotations:
     prometheus.io/scrape: 'true'
   name: prometheus-node-exporter
-  namespace: dev-prometheus
+  namespace: monitoring
   labels:
     app: prometheus
     component: node-exporter
@@ -646,7 +636,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: prometheus
-  namespace: dev-prometheus
+  namespace: monitoring
   labels:
     app: prometheus
     component: core
@@ -661,3 +651,30 @@ spec:
   selector:
     app: prometheus
     component: core
+  
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: prometheus-hpa
+  namespace: monitoring
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: prometheus-core
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: AverageValue
+        averageValue: 3500Mi
